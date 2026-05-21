@@ -1,0 +1,40 @@
+name: SSU LMS 과제 확인
+
+on:
+  schedule:
+    # 매시 정각 (UTC; KST로는 시각만 +9시간, 분은 :00)
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+jobs:
+  check-assignments:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Playwright Chromium
+        run: python -m playwright install --with-deps chromium
+
+      - name: Run assignment scraper
+        env:
+          SSU_ID: ${{ secrets.SSU_ID }}
+          SSU_PASSWORD: ${{ secrets.SSU_PASSWORD }}
+          SSU_HEADLESS: "true"
+          SSU_KEEP_BROWSER_OPEN: "false"
+          SSU_ONLY_ACTIVE_ASSIGNMENTS: "true"
+          PYTHONIOENCODING: utf-8
+        run: python get_token.py
