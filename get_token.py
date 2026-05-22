@@ -27,6 +27,10 @@ DEBUG_DIRNAME = "ssu_lms_debug"
 DEBUG_ENV_KEY = "SSU_DEBUG"
 DASHBOARD_IFRAME_SELECTOR = "#fulliframe"
 EXPAND_ALL_BUTTON = "button.xnms-all-fold-btn:has-text('모두 펼치기')"
+TODO_ITEM_SELECTOR = (
+    ".xn-student-todo-item-container:has(.xnsti-left-icon.assignment), "
+    ".xn-student-todo-item-container:has(.xnsti-left-icon.video)"
+)
 PAST_DUE_KEYWORD = "기한지남"
 
 
@@ -136,15 +140,6 @@ def pause_before_browser_close(headless: bool) -> None:
         "(로그인 화면 확인용 — SSU_KEEP_BROWSER_OPEN=false 로 끌 수 있음)"
     )
     time.sleep(pause_ms / 1000)
-
-
-def safe_wait(page: Page, selector: str, timeout_ms: int, name: str) -> bool:
-    try:
-        page.wait_for_selector(selector, timeout=timeout_ms)
-        return True
-    except PlaywrightTimeoutError:
-        print(f"[대기 실패] {name} 요소를 찾지 못했습니다: {selector}")
-        return False
 
 
 def login_lms(
@@ -319,24 +314,7 @@ def login_lms(
         debug_capture(page, "09_mypage_session_lost")
         return False
 
-    dashboard_signals = [
-        "div.xn-student-todo-container",
-        "text=할 일",
-        "text=To-do",
-        "a[href*='todo']",
-        ".course_box",
-        ".course-card",
-    ]
-    for signal in dashboard_signals:
-        if safe_wait(page, signal, timeout_ms=3000, name="대시보드 신호"):
-            print(f"[로그인 성공] 대시보드 신호 확인: {signal}")
-            return True
-
-    print(
-        "[로그인 성공] 마이페이지 접속은 확인했지만 할 일 UI 선택자는 찾지 못했습니다. "
-        "과제 수집 단계에서 추가 탐색을 시도합니다."
-    )
-    debug_capture(page, "09_mypage_no_todo_selector")
+    debug_capture(page, "09_mypage_ready")
     return True
 
 
@@ -361,12 +339,11 @@ def expand_all_todo_sections(frame: FrameLocator, timeout_ms: int) -> bool:
 
     expand_btn.click()
     try:
-        frame.locator(
-            ".xn-student-todo-item-container:has(.xnsti-left-icon.assignment)"
-        ).first.wait_for(state="visible", timeout=timeout_ms)
+        frame.locator(TODO_ITEM_SELECTOR).first.wait_for(
+            state="attached", timeout=timeout_ms
+        )
     except PlaywrightTimeoutError:
-        print("[알림] '모두 펼치기' 후 과제 목록이 나타나지 않았습니다.")
-        return False
+        pass
     return True
 
 
@@ -413,9 +390,7 @@ def collect_assignments(page: Page, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> lis
             else "과목명 미확인"
         )
 
-        items = course.locator(
-            ".xn-student-todo-item-container:has(.xnsti-left-icon.assignment)"
-        )
+        items = course.locator(TODO_ITEM_SELECTOR)
         for j in range(items.count()):
             item = items.nth(j)
             link_loc = item.locator("a.xnsti-left-title").first
