@@ -3,6 +3,8 @@
 !.env.example
 
 kakao_token.json
+due_soon_notified.json
+lms_bot_settings.json
 
 ssu_lms_debug/
 _mypage_snippet.html
