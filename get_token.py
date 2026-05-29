@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import time
 from datetime import datetime
+
+from lms_time import now_lms, parse_lms_due_datetime
 from pathlib import Path
 from dataclasses import asdict, dataclass
 from typing import Iterable
@@ -17,7 +19,7 @@ DASHBOARD_URL = "https://lms.ssu.ac.kr/mypage"
 SMARTID_HOST_KEYWORD = "smartid.ssu.ac.kr"
 SSO_COMPLETE_TIMEOUT_MS = 45000
 FAIL_PAUSE_MS = 8000
-DEFAULT_TIMEOUT_MS = 15000
+DEFAULT_TIMEOUT_MS = 30000  # iframe 로드 지연 대비 15초 → 30초
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -320,12 +322,25 @@ def login_lms(
 
 def get_dashboard_frame(page: Page, timeout_ms: int) -> FrameLocator:
     """마이페이지 본문은 canvas.ssu.ac.kr 대시보드 iframe에 렌더링됩니다."""
-    page.wait_for_selector(DASHBOARD_IFRAME_SELECTOR, state="attached", timeout=timeout_ms)
+    try:
+        page.wait_for_selector(DASHBOARD_IFRAME_SELECTOR, state="attached", timeout=timeout_ms)
+    except PlaywrightTimeoutError:
+        print(f"[디버그] iframe 선택자({DASHBOARD_IFRAME_SELECTOR})를 찾지 못함. 현재 URL: {page.url}")
+        raise
+
     frame = page.frame_locator(DASHBOARD_IFRAME_SELECTOR)
-    frame.locator(".xn-dash-board, .xnms-my-subject-title").first.wait_for(
-        state="visible",
-        timeout=timeout_ms,
-    )
+    try:
+        frame.locator(".xn-dash-board, .xnms-my-subject-title").first.wait_for(
+            state="visible",
+            timeout=timeout_ms,
+        )
+    except PlaywrightTimeoutError:
+        print(f"[디버그] iframe 내부 대시보드 콘텐츠를 찾지 못함. iframe 존재 여부 확인 중...")
+        if page.locator(DASHBOARD_IFRAME_SELECTOR).count() > 0:
+            print(f"[디버그] iframe은 존재하지만 내부 콘텐츠가 미로드 상태")
+        else:
+            print(f"[디버그] iframe 자체가 DOM에 없음")
+        raise
     return frame
 
 
@@ -353,6 +368,9 @@ def is_active_assignment(dday_text: str, due_date: str) -> bool:
         return False
     if text.startswith("D-"):
         return True
+    due_dt = parse_lms_due_datetime(due_date)
+    if due_dt is not None:
+        return due_dt >= now_lms()
     try:
         due_dt = datetime.strptime(due_date.strip(), "%Y.%m.%d %H:%M")
         return due_dt >= datetime.now()
@@ -368,11 +386,22 @@ def collect_assignments(page: Page, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> lis
             print(f"[알림] 마이페이지 이동 실패: {exc}")
             return []
 
-    try:
-        frame = get_dashboard_frame(page, timeout_ms=timeout_ms)
-    except PlaywrightTimeoutError:
-        print("[알림] 마이페이지 대시보드 iframe을 불러오지 못했습니다.")
-        return []
+    max_retries = 2
+    for attempt in range(max_retries):
+        try:
+            frame = get_dashboard_frame(page, timeout_ms=timeout_ms)
+            break
+        except PlaywrightTimeoutError:
+            if attempt < max_retries - 1:
+                print(f"[알림] iframe 로드 실패 (시도 {attempt + 1}/{max_retries}). 2초 대기 후 재시도...")
+                page.wait_for_timeout(2000)
+                try:
+                    page.reload(wait_until="domcontentloaded")
+                except PlaywrightError:
+                    pass
+            else:
+                print("[알림] 마이페이지 대시보드 iframe을 불러오지 못했습니다.")
+                return []
 
     if not expand_all_todo_sections(frame, timeout_ms=timeout_ms):
         return []
