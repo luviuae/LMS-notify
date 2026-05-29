@@ -46,13 +46,20 @@ def clamp_hours(hours: float) -> float:
     return max(MIN_DUE_SOON_HOURS, min(MAX_DUE_SOON_HOURS, hours))
 
 
+def _is_github_actions() -> bool:
+    return os.getenv("GITHUB_ACTIONS", "").lower() == "true"
+
+
 def get_due_soon_hours(guild_id: int | str | None = None) -> float:
     """
     마감 몇 시간 전 알림인지 반환.
-    우선순위: 서버(guild) 설정 → DISCORD_GUILD_ID( env ) → default_hours → .env DUE_SOON_HOURS
+
+    로컬: Discord /마감알림설정(서버별) → settings 파일 default_hours → .env DUE_SOON_HOURS
+    GitHub Actions: Secret DUE_SOON_HOURS → (캐시된) settings 파일 → 기본 24
     """
     data = load_settings()
     guilds = data.get("guilds", {})
+    settings_exist = _settings_path().exists()
 
     candidates: list[str] = []
     if guild_id is not None:
@@ -65,7 +72,18 @@ def get_due_soon_hours(guild_id: int | str | None = None) -> float:
         if key in guilds:
             return clamp_hours(float(guilds[key]))
 
-    return clamp_hours(float(data.get("default_hours", _default_hours_from_env())))
+    if _is_github_actions():
+        env_hours = os.getenv("DUE_SOON_HOURS", "").strip()
+        if env_hours:
+            return clamp_hours(float(env_hours))
+        if settings_exist:
+            return clamp_hours(float(data.get("default_hours", DEFAULT_DUE_SOON_HOURS)))
+        return float(DEFAULT_DUE_SOON_HOURS)
+
+    if settings_exist:
+        return clamp_hours(float(data.get("default_hours", _default_hours_from_env())))
+
+    return clamp_hours(_default_hours_from_env())
 
 
 def set_due_soon_hours(hours: float, guild_id: int | str) -> float:

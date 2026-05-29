@@ -1,6 +1,12 @@
-# SSU LMS 과제 수집
+# SSU LMS 과제 알림
 
-숭실대 LMS 마이페이지에서 진행 중인 과제를 자동으로 수집합니다.
+숭실대 LMS 마이페이지에서 과제를 수집하고, **설정한 마감 N시간 전**에 Discord로 알립니다.
+
+## 동작 구상
+
+1. **GitHub Actions** — 매시간 `main.py` 실행 → LMS 과제 수집  
+2. **마감 임박** — 남은 시간이 `DUE_SOON_HOURS`(또는 Discord `/마감알림설정`) 이하인 과제만 웹훅 알림  
+3. **중복 방지** — `due_soon_notified.json`으로 과제당 1회만 알림 (Actions 캐시로 유지)
 
 ## 로컬 실행
 
@@ -8,9 +14,13 @@
 pip install -r requirements.txt
 python -m playwright install chromium
 cp .env.example .env
-# .env 에 SSU_ID, SSU_PASSWORD 입력
-python get_token.py
+# .env: SSU_ID, SSU_PASSWORD, DISCORD_WEBHOOK_URL 등
+python main.py
 ```
+
+- 과제만 확인: `python get_token.py`  
+- 웹훅 테스트: `python discord_bot.py`  
+- 마감 시간 설정(슬래시 명령): `python discord_commands_bot.py` → Discord `/마감알림설정`
 
 ## GitHub Actions (1시간마다, PC 꺼져 있어도 실행)
 
@@ -68,16 +78,22 @@ git push -u origin main
 
 | Secret 이름 | 값 |
 |-------------|-----|
-| `SSU_ID` | 학번 (`.env`의 `SSU_ID`) |
-| `SSU_PASSWORD` | 비밀번호 (`.env`의 `SSU_PASSWORD`) |
+| `SSU_ID` | 학번 |
+| `SSU_PASSWORD` | 비밀번호 |
+| `DISCORD_WEBHOOK_URL` | Discord 웹훅 URL (알림 채널) |
+| `DUE_SOON_HOURS` | 마감 몇 시간 전 알림 (예: `24`) — `/마감알림설정`과 맞추기 |
+| `DISCORD_GUILD_ID` | (선택) 서버 ID — 로컬에서 저장한 `lms_bot_settings.json`과 연동 시 |
 
 `.env` 파일은 Git에 올리지 마세요. (`.gitignore`에 포함됨)
 
+> Actions는 `python main.py`를 실행하며, **전체 과제 목록은 보내지 않고** 마감 임박 알림만 보냅니다.  
+> Discord에서 `/마감알림설정`으로 12시간으로 바꿨다면, Secret `DUE_SOON_HOURS`도 `12`로 맞추세요.
+
 ### 3. 동작 확인
 
-- **Actions** 탭 → **SSU LMS 과제 확인** 워크플로 선택
-- **Run workflow** 로 수동 실행해 본 뒤, 로그에 과제 목록이 나오는지 확인
-- 이후 **매시 정각**에 자동 실행 (`cron: 0 * * * *`, GitHub은 UTC로 해석)
+- **Actions** 탭 → **SSU LMS 과제 확인** → **Run workflow**
+- 로그: `[마감 임박] 알림 기준: 마감 N시간 전` → 조건 맞는 과제만 Discord 전송
+- 이후 **매시 정각** 자동 실행 (`cron: 0 * * * *`, UTC 기준)
 
 > 같은 시각에 UTC·KST 모두 `:00`분입니다. 시계만 9시간 차이 납니다.  
 > 예: UTC 00:00 = KST 09:00 (둘 다 정각)
@@ -96,3 +112,7 @@ git push -u origin main
 | `SSU_PASSWORD` | 비밀번호 | (필수) |
 | `SSU_HEADLESS` | 브라우저 숨김 | `false` (Actions에서는 `true`) |
 | `SSU_ONLY_ACTIVE_ASSIGNMENTS` | 마감 전 과제만 | `true` |
+| `DISCORD_WEBHOOK_URL` | Discord 웹훅 | (필수, 알림 시) |
+| `DUE_SOON_HOURS` | 마감 N시간 전 알림 | `24` |
+| `SSU_SEND_ALL_ASSIGNMENTS` | 수집 시 전 과제 전송 | `true` (Actions는 `false`) |
+| `SSU_TIMEZONE` | 마감 시각 기준 | `Asia/Seoul` |

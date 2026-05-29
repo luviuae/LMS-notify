@@ -10,31 +10,23 @@ import json
 import os
 import time
 from dataclasses import asdict
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 from bot_settings import get_due_soon_hours
 from discord_bot import send_due_soon_message
 from get_token import Assignment
-
-DUE_DATE_FMT = "%Y.%m.%d %H:%M"
+from lms_time import DUE_DATE_FMT, now_lms, parse_lms_due_datetime
 DEFAULT_WITHIN_HOURS = 24
 DEFAULT_STATE_FILE = Path(__file__).resolve().parent / "due_soon_notified.json"
 
 
-def parse_due_datetime(due_date: str) -> datetime | None:
-    try:
-        return datetime.strptime(due_date.strip(), DUE_DATE_FMT)
-    except ValueError:
-        return None
-
-
 def time_until_due(due_date: str) -> timedelta | None:
-    due_dt = parse_due_datetime(due_date)
+    due_dt = parse_lms_due_datetime(due_date)
     if due_dt is None:
         return None
-    return due_dt - datetime.now()
+    return due_dt - now_lms()
 
 
 def is_due_within_hours(due_date: str, hours: float = DEFAULT_WITHIN_HOURS) -> bool:
@@ -79,6 +71,22 @@ def load_notified_keys() -> set[str]:
     return {str(item) for item in data}
 
 
+def prune_notified_keys(
+    notified_keys: set[str], assignments: list[Assignment]
+) -> set[str]:
+    """마감 지난 과제·목록에서 사라진 과제 키는 제거 (시간당 재알림 방지 유지)."""
+    pruned: set[str] = set()
+    by_key = {assignment_key(a): a for a in assignments}
+    for key in notified_keys:
+        assignment = by_key.get(key)
+        if assignment is None:
+            continue
+        remaining = time_until_due(assignment.due_date)
+        if remaining is not None and remaining > timedelta(0):
+            pruned.add(key)
+    return pruned
+
+
 def save_notified_keys(keys: set[str]) -> None:
     path = _state_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -106,7 +114,8 @@ def notify_due_soon_assignments(
     )
     within_hours_int = int(hours)
 
-    print(f"[마감 임박] 알림 기준: 마감 {int(hours)}시간 전 (봇 설정 또는 .env)")
+    source = "GitHub Secret" if os.getenv("GITHUB_ACTIONS") else "Discord 설정 또는 .env"
+    print(f"[마감 임박] 알림 기준: 마감 {int(hours)}시간 전 ({source})")
     due_soon = filter_due_soon(assignments, within_hours=hours)
     if not due_soon:
         print(f"[마감 임박] {int(hours)}시간 이내 과제가 없습니다.")
@@ -143,5 +152,6 @@ def notify_due_soon_assignments(
         if delay > 0 and i < len(to_notify) - 1:
             time.sleep(delay)
 
+    notified_keys = prune_notified_keys(notified_keys, assignments)
     save_notified_keys(notified_keys)
     return sent
