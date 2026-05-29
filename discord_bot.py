@@ -129,10 +129,40 @@ def send_test_message() -> int:
     )
 
 
+def send_test_due_soon_message() -> int:
+    """마감 임박 알림 테스트 (약 23시간 50분 남음)."""
+    from datetime import timedelta
+    from lms_time import now_lms
+
+    # 지금 + 23시간 50분 뒤
+    test_due = now_lms() + timedelta(hours=23, minutes=50)
+    remaining = timedelta(hours=23, minutes=50)
+
+    return send_due_soon_message(
+        {
+            "course_name": "테스트 과목 (마감 임박)",
+            "title": "테스트 과제 — 마감 24시간 이내 알림 확인",
+            "due_date": test_due.strftime("%Y.%m.%d %H:%M"),
+            "detail_link": "https://lms.ssu.ac.kr/mypage",
+        },
+        remaining=remaining,
+        within_hours=24,
+    )
+
+
 if __name__ == "__main__":
     load_dotenv()
+    import sys
+
+    test_type = sys.argv[1] if len(sys.argv) > 1 else "basic"
+
     try:
-        status = send_test_message()
+        if test_type == "due_soon":
+            print("[테스트] 마감 임박 알림 테스트 (약 23시간 50분 남음)...")
+            status = send_test_due_soon_message()
+        else:
+            print("[테스트] 기본 웹훅 연결 테스트...")
+            status = send_test_message()
     except ValueError as exc:
         print(f"[설정 오류] {exc}")
         sys.exit(1)
