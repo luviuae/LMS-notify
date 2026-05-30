@@ -107,11 +107,11 @@ def notify_due_soon_assignments(
     이미 알린 과제(상태 파일)는 건너뜁니다.
     """
     hours = within_hours if within_hours is not None else get_due_soon_hours()
-    delay = (
-        delay_sec
-        if delay_sec is not None
-        else float(os.getenv("DISCORD_SEND_DELAY_SEC", "0.5"))
-    )
+    if delay_sec is not None:
+        delay = delay_sec
+    else:
+        delay_raw = os.getenv("DISCORD_SEND_DELAY_SEC", "").strip()
+        delay = float(delay_raw) if delay_raw else 0.5
     within_hours_int = int(hours)
 
     source = "GitHub Secret" if os.getenv("GITHUB_ACTIONS") else "Discord 설정 또는 .env"

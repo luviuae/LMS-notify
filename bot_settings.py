@@ -17,8 +17,15 @@ def _settings_path() -> Path:
     return Path(raw) if raw else DEFAULT_SETTINGS_FILE
 
 
+def _parse_float_or_default(value: str | int | float | None, default: float) -> float:
+    if value is None:
+        return default
+    normalized = str(value).strip()
+    return float(normalized) if normalized else default
+
+
 def _default_hours_from_env() -> float:
-    return float(os.getenv("DUE_SOON_HOURS", str(DEFAULT_DUE_SOON_HOURS)))
+    return _parse_float_or_default(os.getenv("DUE_SOON_HOURS"), DEFAULT_DUE_SOON_HOURS)
 
 
 def load_settings() -> dict:
@@ -70,18 +77,18 @@ def get_due_soon_hours(guild_id: int | str | None = None) -> float:
 
     for key in candidates:
         if key in guilds:
-            return clamp_hours(float(guilds[key]))
+            return clamp_hours(_parse_float_or_default(guilds[key], DEFAULT_DUE_SOON_HOURS))
 
     if _is_github_actions():
         env_hours = os.getenv("DUE_SOON_HOURS", "").strip()
         if env_hours:
             return clamp_hours(float(env_hours))
         if settings_exist:
-            return clamp_hours(float(data.get("default_hours", DEFAULT_DUE_SOON_HOURS)))
+            return clamp_hours(_parse_float_or_default(data.get("default_hours"), DEFAULT_DUE_SOON_HOURS))
         return float(DEFAULT_DUE_SOON_HOURS)
 
     if settings_exist:
-        return clamp_hours(float(data.get("default_hours", _default_hours_from_env())))
+        return clamp_hours(_parse_float_or_default(data.get("default_hours"), _default_hours_from_env()))
 
     return clamp_hours(_default_hours_from_env())
 

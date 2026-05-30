@@ -33,7 +33,8 @@ def notify_lms_assignments() -> tuple[int, int]:
 
     headless = os.getenv("SSU_HEADLESS", "false").lower() == "true"
     user_agent = os.getenv("SSU_USER_AGENT", DEFAULT_USER_AGENT)
-    delay_sec = float(os.getenv("DISCORD_SEND_DELAY_SEC", "0.5"))
+    delay_raw = os.getenv("DISCORD_SEND_DELAY_SEC", "").strip()
+    delay_sec = float(delay_raw) if delay_raw else 0.5
     send_all = os.getenv("SSU_SEND_ALL_ASSIGNMENTS", "false").lower() == "true"
 
     print("[시작] LMS 과제 수집 중...")
