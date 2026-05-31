@@ -20,7 +20,7 @@ DASHBOARD_URL = "https://lms.ssu.ac.kr/mypage"
 SMARTID_HOST_KEYWORD = "smartid.ssu.ac.kr"
 SSO_COMPLETE_TIMEOUT_MS = 45000
 FAIL_PAUSE_MS = 8000
-DEFAULT_TIMEOUT_MS = 60000  # iframe 로드 지연 대비 30초 → 60초
+DEFAULT_TIMEOUT_MS = 90000  # iframe 로드 지연 대비 30초 → 90초
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
