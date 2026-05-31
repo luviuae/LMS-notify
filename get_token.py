@@ -328,55 +328,66 @@ def get_dashboard_frame(page: Page, timeout_ms: int) -> FrameLocator:
         print(f"[디버그] iframe 선택자({DASHBOARD_IFRAME_SELECTOR})를 찾지 못함. 현재 URL: {page.url}")
         raise
 
-    # iframe 로드 후 추가 대기
-    page.wait_for_timeout(2000)
+    # iframe 로드 후 추가 대기 (네트워크가 느린 경우 대비)
+    page.wait_for_timeout(1000)
 
     frame = page.frame_locator(DASHBOARD_IFRAME_SELECTOR)
+    try:
+        frame.locator(".xn-dash-board, .xnms-my-subject-title").first.wait_for(
+            state="visible",
+            timeout=timeout_ms,
+        )
+    except PlaywrightTimeoutError:
+        print(f"[디버그] iframe 내부 대시보드 콘텐츠를 찾지 못함. iframe 존재 여부 확인 중...")
+        if page.locator(DASHBOARD_IFRAME_SELECTOR).count() > 0:
+            print(f"[디버그] iframe은 존재하지만 내부 콘텐츠가 미로드 상태")
+        else:
+            print(f"[디버그] iframe 자체가 DOM에 없음")
+        raise
+    return frame
 
-    # 여러 선택자 시도
-    selectors = [
-        ".xn-dash-board",
-        ".xnms-my-subject-title",
-        ".xn-student-course-container",
-        "body",  # 최후의 수단
-    ]
 
-    for selector in selectors:
-        try:
-            frame.locator(selector).first.wait_for(
-                state="visible",
-                timeout=timeout_ms // 2,  # 각 선택자마다 일부 시간 할당
-            )
-            print(f"[디버그] iframe 콘텐츠 로드됨 (선택자: {selector})")
-            return frame
-        except PlaywrightTimeoutError:
-            continue
-
-    # 모든 선택자 실패
-    print(f"[디버그] 어떤 선택자도 작동하지 않음")
-    if page.locator(DASHBOARD_IFRAME_SELECTOR).count() > 0:
-        print(f"[디버그] iframe은 존재하지만 내부 콘텐츠가 미로드 상태")
-    else:
-        print(f"[디버그] iframe 자체가 DOM에 없음")
-    raise PlaywrightTimeoutError("Dashboard frame content not loaded")
-
+#def expand_all_todo_sections(frame: FrameLocator, timeout_ms: int) -> bool:
+#    expand_btn = frame.locator(EXPAND_ALL_BUTTON).first
+#    if expand_btn.count() == 0:
+#        expand_btn = frame.get_by_role("button", name="모두 펼치기").first
+#    if expand_btn.count() == 0:
+#        print("[알림] '모두 펼치기' 버튼을 찾지 못했습니다.")
+#        return False
+#
+#    expand_btn.click()
+#    try:
+#        frame.locator(TODO_ITEM_SELECTOR).first.wait_for(
+#            state="attached", timeout=timeout_ms
+#        )
+#    except PlaywrightTimeoutError:
+#        pass
+#    return True
 
 def expand_all_todo_sections(frame: FrameLocator, timeout_ms: int) -> bool:
-    expand_btn = frame.locator(EXPAND_ALL_BUTTON).first
-    if expand_btn.count() == 0:
-        expand_btn = frame.get_by_role("button", name="모두 펼치기").first
-    if expand_btn.count() == 0:
-        print("[알림] '모두 펼치기' 버튼을 찾지 못했습니다.")
+    # 1. '모두 펼치기' 버튼이 화면에 완전히 나타나고 글자가 보일 때까지 명시적으로 대기합니다.
+    # 여러 셀렉터 후보를 콤마(,)로 연결하여 하나라도 일치하면 대기하도록 설정합니다.
+    target_locator = frame.locator(f"{EXPAND_ALL_BUTTON}, button:has-text('모두 펼치기')").first
+    
+    try:
+        print("[디버그] '모두 펼치기' 버튼이 렌더링되기를 기다리는 중...")
+        target_locator.wait_for(state="visible", timeout=timeout_ms)
+    except PlaywrightTimeoutError:
+        print("[알림] '모두 펼치기' 버튼이 지정된 시간 내에 화면에 표시되지 않았습니다.")
         return False
 
-    expand_btn.click()
+    # 2. 버튼 클릭 및 이후 할 일 목록 대기
     try:
+        target_locator.click()
+        print("[디버그] '모두 펼치기' 버튼을 클릭했습니다. 할 일 목록 로딩 대기 중...")
+        
         frame.locator(TODO_ITEM_SELECTOR).first.wait_for(
             state="attached", timeout=timeout_ms
         )
-    except PlaywrightTimeoutError:
-        pass
-    return True
+        return True
+    except PlaywrightError as e:
+        print(f"[알림] 버튼 클릭 또는 할 일 목록 로드 중 오류 발생: {e}")
+        return False
 
 
 def is_active_assignment(dday_text: str, due_date: str) -> bool:
