@@ -484,18 +484,35 @@ def collect_assignments(page: Page, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> lis
         print(f"[수집 완료] 과제 {len(assignments)}개를 수집했습니다.")
     return assignments
 
-
 def create_context(
     browser: Browser,
     user_agent: str = DEFAULT_USER_AGENT,
 ) -> BrowserContext:
     viewport_width = int(os.getenv("SSU_VIEWPORT_WIDTH", "1280"))
     viewport_height = int(os.getenv("SSU_VIEWPORT_HEIGHT", "720"))
+    
+    # 🌟 [핵심 수정] 환경 변수에서 타임존을 가져오거나, 기본값으로 'Asia/Seoul'(한국 시간)을 설정합니다.
+    from lms_time import DEFAULT_TIMEZONE
+    tz_name = os.getenv("SSU_TIMEZONE", DEFAULT_TIMEZONE).strip() or DEFAULT_TIMEZONE
+
     return browser.new_context(
         user_agent=user_agent,
         locale="ko-KR",
+        timezone_id=tz_name,  # 👈 브라우저 자체 타임존을 한국 시간으로 강제 고정!
         viewport={"width": viewport_width, "height": viewport_height},
     )
+    
+#def create_context(
+#    browser: Browser,
+#    user_agent: str = DEFAULT_USER_AGENT,
+#) -> BrowserContext:
+#    viewport_width = int(os.getenv("SSU_VIEWPORT_WIDTH", "1280"))
+#    viewport_height = int(os.getenv("SSU_VIEWPORT_HEIGHT", "720"))
+#    return browser.new_context(
+#        user_agent=user_agent,
+#        locale="ko-KR",
+#        viewport={"width": viewport_width, "height": viewport_height},
+#    )
 
 
 #def run(
