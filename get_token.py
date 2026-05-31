@@ -491,29 +491,12 @@ def create_context(
     viewport_width = int(os.getenv("SSU_VIEWPORT_WIDTH", "1280"))
     viewport_height = int(os.getenv("SSU_VIEWPORT_HEIGHT", "720"))
     
-    # 🌟 [핵심 수정] 환경 변수에서 타임존을 가져오거나, 기본값으로 'Asia/Seoul'(한국 시간)을 설정합니다.
-    from lms_time import DEFAULT_TIMEZONE
-    tz_name = os.getenv("SSU_TIMEZONE", DEFAULT_TIMEZONE).strip() or DEFAULT_TIMEZONE
-
+    # 브라우저의 타임존 설정을 제거하여 iframe이 정상 로드되도록 합니다.
     return browser.new_context(
         user_agent=user_agent,
         locale="ko-KR",
-        timezone_id=tz_name,  # 👈 브라우저 자체 타임존을 한국 시간으로 강제 고정!
         viewport={"width": viewport_width, "height": viewport_height},
     )
-    
-#def create_context(
-#    browser: Browser,
-#    user_agent: str = DEFAULT_USER_AGENT,
-#) -> BrowserContext:
-#    viewport_width = int(os.getenv("SSU_VIEWPORT_WIDTH", "1280"))
-#    viewport_height = int(os.getenv("SSU_VIEWPORT_HEIGHT", "720"))
-#    return browser.new_context(
-#        user_agent=user_agent,
-#        locale="ko-KR",
-#        viewport={"width": viewport_width, "height": viewport_height},
-#    )
-
 
 #def run(
 #    headless: bool = False,
@@ -648,3 +631,100 @@ def expand_all_todo_sections(frame: Any, timeout_ms: int) -> bool:
         # 가끔 과제가 적거나 이미 펼쳐져 있어 버튼이 안 보이는 경우, 에러로 멈추지 않고 계속 진행하도록 유도합니다.
         print("[알림] '모두 펼치기' 버튼을 찾지 못했거나 이미 펼쳐져 있습니다. 수집을 계속 진행합니다.")
         return True
+
+def _adjust_utc_to_kst_string(due_date_str: str) -> str:
+    """GitHub Actions 환경에서 브라우저가 UTC 기준으로 크롤링한 시간을 한국 시간(KST)으로 9시간 앞당깁니다."""
+    if os.getenv("GITHUB_ACTIONS", "").lower() != "true":
+        return due_date_str  # 로컬 환경인 경우 보정 없이 그대로 반환
+    try:
+        from datetime import datetime, timedelta
+        from lms_time import DUE_DATE_FMT
+        # 문자열을 파싱한 뒤 정확히 9시간을 더해줍니다.
+        naive_dt = datetime.strptime(due_date_str.strip(), DUE_DATE_FMT)
+        kst_dt = naive_dt + timedelta(hours=9)
+        return kst_dt.strftime(DUE_DATE_FMT)
+    except Exception:
+        return due_date_str  # 파싱 실패 시 원본 문자열 유지
+
+
+def collect_assignments(page: Page, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> list[Assignment]:
+    if "mypage" not in page.url:
+        try:
+            page.goto(DASHBOARD_URL, wait_until="domcontentloaded")
+        except PlaywrightError as exc:
+            print(f"[알림] 마이페이지 이동 실패: {exc}")
+            return []
+
+    max_retries = 2
+    for attempt in range(max_retries):
+        try:
+            frame = get_dashboard_frame(page, timeout_ms=timeout_ms)
+            break
+        except PlaywrightTimeoutError:
+            if attempt < max_retries - 1:
+                print(f"[알림] iframe 로드 실패 (시도 {attempt + 1}/{max_retries}). 2초 대기 후 재시도...")
+                page.wait_for_timeout(2000)
+                try:
+                    page.reload(wait_until="domcontentloaded")
+                except PlaywrightError:
+                    pass
+            else:
+                print("[알림] 마이페이지 대시보드 iframe을 불러오지 못했습니다.")
+                return []
+
+    if not expand_all_todo_sections(frame, timeout_ms=timeout_ms):
+        return []
+
+    only_active = os.getenv("SSU_ONLY_ACTIVE_ASSIGNMENTS", "true").lower() == "true"
+    assignments: list[Assignment] = []
+    courses = frame.locator(".xn-student-course-container")
+
+    for i in range(courses.count()):
+        course = courses.nth(i)
+        title_loc = course.locator(".xnscc-header-title").first
+        course_name = (
+            title_loc.inner_text(timeout=2000).strip()
+            if title_loc.count() > 0
+            else "과목명 미확인"
+        )
+
+        items = course.locator(TODO_ITEM_SELECTOR)
+        for j in range(items.count()):
+            item = items.nth(j)
+            link_loc = item.locator("a.xnsti-left-title").first
+            if link_loc.count() == 0:
+                continue
+
+            title = link_loc.inner_text(timeout=2000).strip()
+            href = link_loc.get_attribute("href") or ""
+            due_loc = item.locator(".xnsti-right-due-at").first
+            due_date = (
+                due_loc.inner_text(timeout=2000).strip()
+                if due_loc.count() > 0
+                else "마감기한 미확인"
+            )
+            
+            # 🌟 [핵심 수정] 가져온 마감 기한이 정상적이라면 GitHub Actions 시차 보정 적용
+            if due_date != "마감기한 미확인":
+                due_date = _adjust_utc_to_kst_string(due_date)
+
+            dday_loc = item.locator(".xnsti-right-dday-text").first
+            dday = dday_loc.inner_text(timeout=2000).strip() if dday_loc.count() > 0 else ""
+
+            if only_active and not is_active_assignment(dday, due_date):
+                continue
+
+            assignments.append(
+                Assignment(
+                    course_name=course_name,
+                    title=title,
+                    due_date=due_date,
+                    detail_link=href or "상세 링크 미확인",
+                )
+            )
+
+    if not assignments:
+        print("[알림] iframe 대시보드에서 진행 중인 과제를 찾지 못했습니다.")
+    else:
+        print(f"[수집 완료] 과제 {len(assignments)}개를 수집했습니다.")
+    return assignments
