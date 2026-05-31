@@ -45,6 +45,15 @@ def notify_lms_assignments() -> tuple[int, int]:
         print("[완료] 수집된 과제가 없습니다.")
         return 0, 0
 
+    # 수집된 과제 상세 출력 (디버그용)
+    print(f"\n[수집 완료] 총 {len(assignments)}개 과제 정보:")
+    for idx, assignment in enumerate(assignments, start=1):
+        print(f"\n  [{idx}] {assignment.course_name}")
+        print(f"      과제명: {assignment.title}")
+        print(f"      마감: {assignment.due_date}")
+        print(f"      링크: {assignment.detail_link}")
+    print()
+
     due_soon_sent = notify_due_soon_assignments(assignments)
 
     all_sent = 0
