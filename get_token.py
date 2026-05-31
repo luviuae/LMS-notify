@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Browser, BrowserContext, FrameLocator, Page, sync_playwright
+from typing import Any  # 파일 상단에 Any 임포트가 없다면 추가해주세요
 
 LOGIN_URL = "https://lms.ssu.ac.kr/"
 DASHBOARD_URL = "https://lms.ssu.ac.kr/mypage"
@@ -544,3 +545,76 @@ if __name__ == "__main__":
 
     result = run(headless=headless_flag, user_agent=ua)
     print_assignments(result)
+
+
+def get_dashboard_frame(page: Page, timeout_ms: int) -> Any:
+    """마이페이지 본문은 canvas.ssu.ac.kr 대시보드 iframe에 렌더링됩니다.
+    GitHub Actions 등 헤드리스 환경에서 크로스 오리진 제한으로 로드가 안 될 경우, 직접 URL로 우회합니다.
+    """
+    try:
+        page.wait_for_selector(DASHBOARD_IFRAME_SELECTOR, state="attached", timeout=timeout_ms)
+    except PlaywrightTimeoutError:
+        print(f"[디버그] iframe 선택자({DASHBOARD_IFRAME_SELECTOR})를 찾지 못함. 현재 URL: {page.url}")
+        raise
+
+    # 1. iframe의 실제 주소(src)를 추출합니다.
+    iframe_src = page.locator(DASHBOARD_IFRAME_SELECTOR).first.get_attribute("src")
+
+    # 2. GitHub Actions 환경이거나 헤드리스 환경일 경우, iframe을 건너뛰고 직접 이동(Bypass)을 시도합니다.
+    if os.getenv("GITHUB_ACTIONS", "").lower() == "true" and iframe_src:
+        print(f"[디버그] GitHub Actions 환경 감지: iframe 제한을 우회하기 위해 Canvas URL로 직접 이동합니다.")
+        try:
+            page.goto(iframe_src, wait_until="domcontentloaded")
+            page.wait_for_selector(".xn-dash-board, .xnms-my-subject-title", state="visible", timeout=timeout_ms)
+            print("[디버그] 직접 이동 성공: 대시보드 콘텐츠가 확인되었습니다.")
+            return page  # iframe 대신 page 자체를 반환해도 구조가 동일하여 하위 로직이 정상 작동합니다.
+        except PlaywrightTimeoutError:
+            print("[디버그] 직접 이동 시도 타임아웃. 원래 iframe 방식으로 복귀하여 재시도합니다.")
+
+    # 3. 기존 iframe 방식 진행 (로컬 환경 등 기본 흐름)
+    page.wait_for_timeout(1000)
+    frame = page.frame_locator(DASHBOARD_IFRAME_SELECTOR)
+    try:
+        frame.locator(".xn-dash-board, .xnms-my-subject-title").first.wait_for(
+            state="visible",
+            timeout=timeout_ms,
+        )
+        return frame
+    except PlaywrightTimeoutError:
+        print(f"[디버그] iframe 내부 대시보드 콘텐츠를 찾지 못함. iframe 존재 여부 확인 중...")
+        if page.locator(DASHBOARD_IFRAME_SELECTOR).count() > 0:
+            print(f"[디버그] iframe은 존재하지만 내부 콘텐츠가 미로드 상태")
+            
+            # iframe 로드 실패 시 마지막 보루로 직접 이동 강제 실행
+            if iframe_src and "canvas.ssu.ac.kr" not in page.url:
+                print("[디버그] 마지막 수단: iframe의 src 주소로 메인 페이지를 강제 이동시킵니다.")
+                try:
+                    page.goto(iframe_src, wait_until="domcontentloaded")
+                    page.wait_for_selector(".xn-dash-board, .xnms-my-subject-title", state="visible", timeout=timeout_ms)
+                    return page
+                except PlaywrightTimeoutError:
+                    pass
+        else:
+            print(f"[디버그] iframe 자체가 DOM에 없음")
+        raise
+
+
+def expand_all_todo_sections(frame: Any, timeout_ms: int) -> bool:
+    """'모두 펼치기' 버튼을 누릅니다. race condition 방지를 위해 레이아웃 유연성을 확보합니다."""
+    target_locator = frame.locator(f"{EXPAND_ALL_BUTTON}, button:has-text('모두 펼치기')").first
+    
+    try:
+        # 버튼이 화면에 보일 때까지 최대 5초 대기
+        target_locator.wait_for(state="visible", timeout=min(5000, timeout_ms))
+        target_locator.click()
+        print("[디버그] '모두 펼치기' 버튼을 클릭했습니다.")
+        
+        # 클릭 후 할 일 목록 아이템이 최소 하나 이상 나타날 때까지 대기
+        frame.locator(TODO_ITEM_SELECTOR).first.wait_for(
+            state="attached", timeout=min(5000, timeout_ms)
+        )
+        return True
+    except PlaywrightTimeoutError:
+        # 가끔 과제가 적거나 이미 펼쳐져 있어 버튼이 안 보이는 경우, 에러로 멈추지 않고 계속 진행하도록 유도합니다.
+        print("[알림] '모두 펼치기' 버튼을 찾지 못했거나 이미 펼쳐져 있습니다. 수집을 계속 진행합니다.")
+        return True
