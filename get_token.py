@@ -498,6 +498,35 @@ def create_context(
     )
 
 
+#def run(
+#    headless: bool = False,
+#    user_agent: str = DEFAULT_USER_AGENT,
+#    timeout_ms: int = DEFAULT_TIMEOUT_MS,
+#) -> list[Assignment]:
+#    load_dotenv()
+#    username = os.getenv("SSU_ID")
+#    password = os.getenv("SSU_PASSWORD")
+#
+#    if not username or not password:
+#        raise ValueError(".env 파일에 SSU_ID / SSU_PASSWORD 값을 설정해주세요.")
+#
+#    with sync_playwright() as p:
+#        browser = p.chromium.launch(headless=headless)
+#        context = create_context(browser=browser, user_agent=user_agent)
+#        page = context.new_page()
+#        page.set_default_timeout(timeout_ms)
+#
+#        if not login_lms(page, username, password, timeout_ms=timeout_ms):
+#            pause_before_browser_close(headless=headless)
+#            context.close()
+#            browser.close()
+#            return []
+#
+#        assignments = collect_assignments(page, timeout_ms=timeout_ms)
+#        context.close()
+#        browser.close()
+#        return assignments
+
 def run(
     headless: bool = False,
     user_agent: str = DEFAULT_USER_AGENT,
@@ -511,7 +540,16 @@ def run(
         raise ValueError(".env 파일에 SSU_ID / SSU_PASSWORD 값을 설정해주세요.")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless)
+        # 🌟 [핵심] GitHub Actions(Headless 환경)에서 크로스 오리진 iframe의
+        # 쿠키 차단 및 사이트 격리(Site Isolation) 정책을 무력화하는 옵션을 주입합니다.
+        launch_args = [
+            "--disable-web-security",
+            "--disable-features=IsolateOrigins,site-per-process",
+            "--disable-site-isolation-trials"
+        ]
+        
+        # 주입한 인자(args)를 브라우저 실행 시 함께 넘겨줍니다.
+        browser = p.chromium.launch(headless=headless, args=launch_args)
         context = create_context(browser=browser, user_agent=user_agent)
         page = context.new_page()
         page.set_default_timeout(timeout_ms)
@@ -547,78 +585,32 @@ if __name__ == "__main__":
     print_assignments(result)
 
 
-
-def get_dashboard_frame(page: Page, timeout_ms: int) -> Any:
-    """마이페이지 본문은 canvas.ssu.ac.kr 대시보드 iframe에 렌더링됩니다.
-    이미 Canvas 도메인에 진입했거나 우회 성공한 경우를 포함하여 유연하게 처리합니다.
-    """
-    # 🌟 [핵심 수정] 이미 Canvas 페이지에 있거나 우회에 성공해 주소가 바뀐 상태라면 
-    # 더 이상 iframe을 찾지 않고, 현재 page 자체를 대시보드로 인식하여 즉시 반환합니다.
-    if "canvas.ssu.ac.kr" in page.url:
-        print(f"[디버그] 현재 이미 Canvas 페이지에 놓여 있습니다. (URL: {page.url})")
-        try:
-            # 과제 컨테이너 레이아웃 클래스까지 포함하여 유연하게 대기합니다.
-            page.wait_for_selector(
-                ".xn-dash-board, .xnms-my-subject-title, .xn-student-course-container", 
-                state="visible", 
-                timeout=timeout_ms
-            )
-        except PlaywrightTimeoutError:
-            print("[디버그] Canvas 대시보드 요소 대기 타임아웃. 일단 수집을 강제 진행합니다.")
-        return page
-
-    # lms.ssu.ac.kr 마이페이지인 기본 상태일 때만 iframe 추출을 시작합니다.
+def get_dashboard_frame(page: Page, timeout_ms: int) -> FrameLocator:
+    """마이페이지 본문은 canvas.ssu.ac.kr 대시보드 iframe에 렌더링됩니다."""
     try:
+        # iframe 태그 자체 임베딩 완료 대기
         page.wait_for_selector(DASHBOARD_IFRAME_SELECTOR, state="attached", timeout=timeout_ms)
     except PlaywrightTimeoutError:
         print(f"[디버그] iframe 선택자({DASHBOARD_IFRAME_SELECTOR})를 찾지 못함. 현재 URL: {page.url}")
         raise
 
-    iframe_src = page.locator(DASHBOARD_IFRAME_SELECTOR).first.get_attribute("src")
-
-    # GitHub Actions 환경 우회 로직
-    if os.getenv("GITHUB_ACTIONS", "").lower() == "true" and iframe_src:
-        print(f"[디버그] GitHub Actions 환경 감지: iframe 제한을 우회하기 위해 Canvas URL로 직접 이동합니다.")
-        try:
-            # 페이지 로딩 및 세션 유기적 연동을 위해 wait_until을 "load"로 안정화합니다.
-            page.goto(iframe_src, wait_until="load", timeout=timeout_ms)
-            
-            # 대시보드 주소 패턴으로 정상 전환되었는지 URL 검증 대기
-            page.wait_for_url("**/learningx/dashboard*", timeout=timeout_ms)
-            print(f"[디버그] 직접 이동 완료 (최종 URL: {page.url})")
-            
-            page.wait_for_selector(
-                ".xn-dash-board, .xnms-my-subject-title, .xn-student-course-container", 
-                state="visible", 
-                timeout=timeout_ms
-            )
-            return page
-        except PlaywrightError as e:
-            print(f"[디버그] 직접 이동 처리 중 예외 발생: {e}")
-            # 💡 중요: 이동 직후 타임아웃이 났더라도 URL이 이미 canvas로 바뀌었다면 
-            # 탈출하지 말고 무조건 page를 반환해서 다음 수집 스텝으로 넘겨줍니다.
-            if "canvas.ssu.ac.kr" in page.url:
-                print("[디버그] 타임아웃이 발생했으나 URL이 Canvas로 전환되었으므로 page를 반환합니다.")
-                return page
-            
-            print("[디버그] Canvas 전환에 완전히 실패하여 원래 LMS 마이페이지 복귀를 시도합니다.")
-            try:
-                page.goto(DASHBOARD_URL, wait_until="domcontentloaded")
-            except PlaywrightError:
-                pass
-
-    # 기존 iframe 방식 진행 (로컬 환경 등 기본 흐름)
-    page.wait_for_timeout(1000)
+    # iframe 내부 네트워크 안정화를 위해 잠시 대기
+    page.wait_for_timeout(2000)
     frame = page.frame_locator(DASHBOARD_IFRAME_SELECTOR)
+    
+    print("[디버그] iframe 내부 대시보드 콘텐츠 로딩 대기 중...")
     try:
+        # 크로스 오리진 제한이 풀린 상태이므로 내부 요소가 정상적으로 잡힐 때까지 대기합니다.
         frame.locator(".xn-dash-board, .xnms-my-subject-title, .xn-student-course-container").first.wait_for(
             state="visible",
             timeout=timeout_ms,
         )
+        print("[디버그] iframe 내부 대시보드 콘텐츠 로드 완료!")
         return frame
     except PlaywrightTimeoutError:
         print(f"[디버그] iframe 내부 대시보드 콘텐츠를 찾지 못함. 현재 URL: {page.url}")
         raise
+
 
 def expand_all_todo_sections(frame: Any, timeout_ms: int) -> bool:
     """'모두 펼치기' 버튼을 누릅니다. race condition 방지를 위해 레이아웃 유연성을 확보합니다."""
