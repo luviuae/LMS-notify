@@ -300,7 +300,7 @@ def login_lms(
     print("[로그인 성공] LMS 세션 확인됨. 마이페이지로 이동합니다.")
     try:
         page.goto(DASHBOARD_URL, wait_until="domcontentloaded")
-        page.wait_for_load_state("networkidle", timeout=15000)
+        page.wait_for_load_state("networkidle", timeout=20000)
     except PlaywrightTimeoutError:
         page.wait_for_timeout(2000)
     except PlaywrightError as exc:
@@ -327,6 +327,9 @@ def get_dashboard_frame(page: Page, timeout_ms: int) -> FrameLocator:
     except PlaywrightTimeoutError:
         print(f"[디버그] iframe 선택자({DASHBOARD_IFRAME_SELECTOR})를 찾지 못함. 현재 URL: {page.url}")
         raise
+
+    # iframe 로드 후 추가 대기 (네트워크가 느린 경우 대비)
+    page.wait_for_timeout(1000)
 
     frame = page.frame_locator(DASHBOARD_IFRAME_SELECTOR)
     try:
