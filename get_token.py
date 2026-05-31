@@ -19,7 +19,7 @@ DASHBOARD_URL = "https://lms.ssu.ac.kr/mypage"
 SMARTID_HOST_KEYWORD = "smartid.ssu.ac.kr"
 SSO_COMPLETE_TIMEOUT_MS = 45000
 FAIL_PAUSE_MS = 8000
-DEFAULT_TIMEOUT_MS = 30000  # iframe 로드 지연 대비 15초 → 30초
+DEFAULT_TIMEOUT_MS = 60000  # iframe 로드 지연 대비 30초 → 60초
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -328,23 +328,37 @@ def get_dashboard_frame(page: Page, timeout_ms: int) -> FrameLocator:
         print(f"[디버그] iframe 선택자({DASHBOARD_IFRAME_SELECTOR})를 찾지 못함. 현재 URL: {page.url}")
         raise
 
-    # iframe 로드 후 추가 대기 (네트워크가 느린 경우 대비)
-    page.wait_for_timeout(1000)
+    # iframe 로드 후 추가 대기
+    page.wait_for_timeout(2000)
 
     frame = page.frame_locator(DASHBOARD_IFRAME_SELECTOR)
-    try:
-        frame.locator(".xn-dash-board, .xnms-my-subject-title").first.wait_for(
-            state="visible",
-            timeout=timeout_ms,
-        )
-    except PlaywrightTimeoutError:
-        print(f"[디버그] iframe 내부 대시보드 콘텐츠를 찾지 못함. iframe 존재 여부 확인 중...")
-        if page.locator(DASHBOARD_IFRAME_SELECTOR).count() > 0:
-            print(f"[디버그] iframe은 존재하지만 내부 콘텐츠가 미로드 상태")
-        else:
-            print(f"[디버그] iframe 자체가 DOM에 없음")
-        raise
-    return frame
+
+    # 여러 선택자 시도
+    selectors = [
+        ".xn-dash-board",
+        ".xnms-my-subject-title",
+        ".xn-student-course-container",
+        "body",  # 최후의 수단
+    ]
+
+    for selector in selectors:
+        try:
+            frame.locator(selector).first.wait_for(
+                state="visible",
+                timeout=timeout_ms // 2,  # 각 선택자마다 일부 시간 할당
+            )
+            print(f"[디버그] iframe 콘텐츠 로드됨 (선택자: {selector})")
+            return frame
+        except PlaywrightTimeoutError:
+            continue
+
+    # 모든 선택자 실패
+    print(f"[디버그] 어떤 선택자도 작동하지 않음")
+    if page.locator(DASHBOARD_IFRAME_SELECTOR).count() > 0:
+        print(f"[디버그] iframe은 존재하지만 내부 콘텐츠가 미로드 상태")
+    else:
+        print(f"[디버그] iframe 자체가 DOM에 없음")
+    raise PlaywrightTimeoutError("Dashboard frame content not loaded")
 
 
 def expand_all_todo_sections(frame: FrameLocator, timeout_ms: int) -> bool:
