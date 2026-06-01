@@ -527,6 +527,44 @@ def create_context(
 #        browser.close()
 #        return assignments
 
+#def run(
+#    headless: bool = False,
+#    user_agent: str = DEFAULT_USER_AGENT,
+#    timeout_ms: int = DEFAULT_TIMEOUT_MS,
+#) -> list[Assignment]:
+#    load_dotenv()
+#    username = os.getenv("SSU_ID")
+#    password = os.getenv("SSU_PASSWORD")
+#
+#    if not username or not password:
+#        raise ValueError(".env 파일에 SSU_ID / SSU_PASSWORD 값을 설정해주세요.")
+#
+#    with sync_playwright() as p:
+#        # 🌟 [핵심] GitHub Actions(Headless 환경)에서 크로스 오리진 iframe의
+#        # 쿠키 차단 및 사이트 격리(Site Isolation) 정책을 무력화하는 옵션을 주입합니다.
+#        launch_args = [
+#            "--disable-web-security",
+#            "--disable-features=IsolateOrigins,site-per-process",
+#            "--disable-site-isolation-trials"
+#        ]
+#        
+#        # 주입한 인자(args)를 브라우저 실행 시 함께 넘겨줍니다.
+#        browser = p.chromium.launch(headless=headless, args=launch_args)
+#        context = create_context(browser=browser, user_agent=user_agent)
+#        page = context.new_page()
+#        page.set_default_timeout(timeout_ms)
+#
+#        if not login_lms(page, username, password, timeout_ms=timeout_ms):
+#            pause_before_browser_close(headless=headless)
+#            context.close()
+#            browser.close()
+#            return []
+#
+#        assignments = collect_assignments(page, timeout_ms=timeout_ms)
+#        context.close()
+#        browser.close()
+#        return assignments
+
 def run(
     headless: bool = False,
     user_agent: str = DEFAULT_USER_AGENT,
@@ -540,19 +578,21 @@ def run(
         raise ValueError(".env 파일에 SSU_ID / SSU_PASSWORD 값을 설정해주세요.")
 
     with sync_playwright() as p:
-        # 🌟 [핵심] GitHub Actions(Headless 환경)에서 크로스 오리진 iframe의
-        # 쿠키 차단 및 사이트 격리(Site Isolation) 정책을 무력화하는 옵션을 주입합니다.
+        # 🌟 [스텔스 인자 추가] 브라우저 자동화 제어 낙인을 숨깁니다.
         launch_args = [
             "--disable-web-security",
             "--disable-features=IsolateOrigins,site-per-process",
-            "--disable-site-isolation-trials"
+            "--disable-site-isolation-trials",
+            "--disable-blink-features=AutomationControlled" # 👈 핵심: 자동화 제어 플래그 비활성화
         ]
         
-        # 주입한 인자(args)를 브라우저 실행 시 함께 넘겨줍니다.
         browser = p.chromium.launch(headless=headless, args=launch_args)
         context = create_context(browser=browser, user_agent=user_agent)
         page = context.new_page()
         page.set_default_timeout(timeout_ms)
+
+        # 🌟 [스텔스 스크립트 주입] 웹사이트가 navigator.webdriver 속성을 검사해 봇인지 알아내는 것을 원천 차단합니다.
+        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
         if not login_lms(page, username, password, timeout_ms=timeout_ms):
             pause_before_browser_close(headless=headless)
