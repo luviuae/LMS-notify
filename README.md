@@ -1,118 +1,287 @@
-# SSU LMS 과제 알림
+# SSU LMS 과제 알림봇
 
-숭실대 LMS 마이페이지에서 과제를 수집하고, **설정한 마감 N시간 전**에 Discord로 알립니다.
+숭실대학교 LMS에서 과제를 자동으로 수집하고, **마감 시간이 임박하면 Discord로 알림**을 보내는 자동화 봇입니다.
 
-## 동작 구상
+## 🎯 주요 기능
 
-1. **GitHub Actions** — 매시간 `main.py` 실행 → LMS 과제 수집  
-2. **마감 임박** — 남은 시간이 `DUE_SOON_HOURS`(또는 Discord `/마감알림설정`) 이하인 과제만 웹훅 알림  
-3. **중복 방지** — `due_soon_notified.json`으로 과제당 1회만 알림 (Actions 캐시로 유지)
+- **자동 과제 수집**: Playwright를 이용한 LMS 크롤링 (매시간 실행)
+- **마감 임박 알림**: 설정된 시간(기본 24시간) 전부터 Discord로 알림
+- **중복 알림 방지**: 같은 과제는 한 번만 알림
+- **서버별 설정**: Discord 슬래시 명령으로 서버마다 다른 알림 시간 설정 가능
+- **GitHub Actions 자동화**: 클라우드에서 매시간 자동 실행 (PC 켜져있지 않아도 됨)
 
-## 로컬 실행
+---
 
-```bash
-pip install -r requirements.txt
-python -m playwright install chromium
-cp .env.example .env
-# .env: SSU_ID, SSU_PASSWORD, DISCORD_WEBHOOK_URL 등
-python main.py
+## 🔄 동작 흐름
+
+### 1단계: LMS 로그인 & 과제 수집 (`get_token.py`)
+
+```
+LMS 홈페이지 → "통합 로그인" 버튼 클릭
+    ↓
+SmartID SSO 인증 (학번/비밀번호 제출)
+    ↓
+마이페이지 접속 → iframe 로드
+    ↓
+"모두 펼치기" 버튼 클릭 → 과제 목록 파싱
+    ↓
+과제 정보 추출 (과목명, 제목, 마감시간, 링크)
 ```
 
-- 과제만 확인: `python get_token.py`  
-- 웹훅 테스트: `python discord_bot.py`  
-- 마감 시간 설정(슬래시 명령): `python discord_commands_bot.py` → Discord `/마감알림설정`
+**세부 기술:**
+- **Playwright**: Chromium 기반 브라우저 자동화
+- **스텔스 모드**: 자동화 감지 회피 (`navigator.webdriver` 속성 제거, 크로스 오리진 보안 정책 우회)
+- **재시도 로직**: iframe 로드 실패 시 최대 2회 재시도
+- **타임존 보정**: GitHub Actions (UTC) 환경에서 자동으로 KST(한국 시간)로 변환
 
-## GitHub Actions (1시간마다, PC 꺼져 있어도 실행)
+### 2단계: 마감 임박 과제 필터링 (`due_soon_notify.py`)
 
-### 1. GitHub에 코드 올리기
+```
+수집된 과제 목록
+    ↓
+"마감이 아직 안 지났는가?" 확인
+    ↓
+"마감까지 설정된 시간(기본 24시간) 이내인가?" 확인
+    ↓
+이미 알린 과제는 건너뛰기 (due_soon_notified.json 확인)
+    ↓
+마감 임박 과제만 선별
+```
 
-**본인 계정**이든 **팀원 계정**(`gimudowane-create/LMS-notice-bot` 등) 저장소든, push 권한만 있으면 동일합니다.
+**상태 관리:**
+- `due_soon_notified.json`: 이미 알린 과제 키 저장
+- 과제 마감 후 자동으로 상태에서 제거
+- 중복 알림 완벽 차단
 
-#### 처음 올릴 때 (PowerShell)
+### 3단계: Discord 알림 전송 (`discord_bot.py`)
 
+```
+마감 임박 과제 정보
+    ↓
+Discord Embed 형식으로 변환
+    ├─ 색상: 주황색 (마감 임박 표시)
+    ├─ 제목: 과제명
+    ├─ 내용: 과목명, 마감 시간, 남은 시간
+    └─ 링크: LMS 과제 상세 페이지
+    ↓
+Discord 웹훅 API로 전송
+```
+
+**예시 알림:**
+```
+⏰ 과제 마감 24시간 이내!
+
+[제목] 네트워크 프로그래밍 과제 3
+[과목] 네트워크 프로그래밍
+[마감] 2026.06.10 23:59
+[남은 시간] 약 23시간 45분
+```
+
+### 4단계: 설정 관리 (`bot_settings.py`, `discord_commands_bot.py`)
+
+Discord 슬래시 명령으로 실시간 설정 변경:
+
+```
+/마감알림설정 [시간]     → 마감 N시간 전 알림 설정 (1~168시간)
+/마감알림확인           → 현재 설정 확인
+```
+
+**설정 우선순위:**
+1. Discord 명령어로 저장한 **서버별 설정** (lms_bot_settings.json)
+2. GitHub Secrets `DUE_SOON_HOURS`
+3. 환경변수 `.env` 파일
+4. 기본값: 24시간
+
+---
+
+## 🚀 실행 방법
+
+### 로컬 실행
+
+#### 사전 준비
+
+```bash
+# 1. Python 패키지 설치
+pip install -r requirements.txt
+
+# 2. Playwright 브라우저 설치
+python -m playwright install chromium
+
+# 3. 환경 변수 설정
+cp .env.example .env
+# .env 파일 편집: SSU_ID, SSU_PASSWORD, DISCORD_WEBHOOK_URL 등
+```
+
+#### 실행 명령어
+
+```bash
+# 메인 프로그램 (과제 수집 + 마감 임박 알림)
+python main.py
+
+# Discord 봇 (슬래시 명령어 서버)
+python discord_commands_bot.py
+
+# 과제만 확인 (알림 없이)
+python get_token.py
+
+# 웹훅 연결 테스트
+python discord_bot.py
+
+# 마감 임박 알림 테스트
+python discord_bot.py due_soon
+```
+
+### GitHub Actions 자동 실행
+
+#### 1단계: 저장소 생성 및 코드 푸시
+
+**첫 번째 푸시 (PowerShell)**
 ```powershell
 cd "c:\Users\kkhoo\Desktop\2-2\Project"
 git init
 git add .
-
-# 최초 1회: Git이 커밋 작성자를 알아야 합니다 (아래 이메일/이름은 본인 것으로 바꾸세요)
 git config user.name "본인이름"
-git config user.email "github에등록한이메일@example.com"
-
-git commit -m "Add SSU LMS assignment checker with GitHub Actions"
+git config user.email "github@example.com"
+git commit -m "Initial commit: SSU LMS assignment notifier"
 git branch -M main
-
-# 저장소가 없으면 추가 (이미 있으면 set-url 사용)
-git remote add origin https://github.com/gimudowane-create/LMS-notice-bot.git
-# 이미 origin이 다른 주소면:
-# git remote set-url origin https://github.com/gimudowane-create/LMS-notice-bot.git
-
+git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO.git
 git push -u origin main
 ```
 
-#### 자주 나는 에러
+#### 2단계: GitHub Secrets 등록
 
-| 메시지 | 원인 | 해결 |
-|--------|------|------|
-| `Please tell me who you are` | `user.name` / `user.email` 미설정 | 위 `git config` 두 줄 실행 후 `git commit` 다시 |
-| `src refspec main does not match any` | 커밋이 없음 (commit 실패) | `git commit` 성공 여부 확인 (`git log`) |
-| `remote origin already exists` | remote 중복 | `git remote set-url origin https://github.com/...` |
-| `Permission denied` / `403` | 팀 저장소 push 권한 없음 | 팀원이 Collaborator로 초대 |
-| `Repository not found` | URL 오타 또는 비공개 repo 접근 불가 | URL·로그인 계정 확인 |
+저장소 → Settings → Secrets and variables → Actions → New repository secret
 
-> README의 `<사용자명>`은 **예시**입니다. 그대로 붙여넣지 말고 실제 URL을 쓰세요.  
-> 예: `https://github.com/gimudowane-create/LMS-notice-bot.git`
+| 항목 | 값 |
+|------|-----|
+| `SSU_ID` | 숭실대 학번 |
+| `SSU_PASSWORD` | LMS 비밀번호 |
+| `DISCORD_WEBHOOK_URL` | [Discord 웹훅 URL 생성법](#discord-웹훅-url-생성) |
+| `DUE_SOON_HOURS` | 마감 몇 시간 전 알림 (예: 24) |
+| `DISCORD_GUILD_ID` | (선택) Discord 서버 ID - 로컬 설정과 동기화 시 필요 |
 
-#### 팀원 계정 저장소에 올리는 경우
+#### 3단계: 동작 확인
 
-1. 팀원이 GitHub에서 `LMS-notice-bot` 저장소 생성 (또는 이미 생성됨)
-2. 팀원이 **Settings → Collaborators** 에서 당신 GitHub 아이디를 **Write** 이상으로 초대
-3. 당신 PC에서 `git push` (GitHub 로그인/토큰은 **push 하는 사람** 계정)
-4. **Actions Secrets**(`SSU_ID`, `SSU_PASSWORD`)는 **그 저장소 Settings**에 등록  
-   - 팀원이 등록해도 되고, 권한 있으면 당신이 등록해도 됨  
-   - LMS 학번/비밀번호는 **누구 과제를 긁을지**에 맞게 정하면 됨 (본인/팀원 계정 모두 가능)
+저장소 → Actions 탭 → "SSU LMS 과제 확인" → Run workflow
 
-### 2. Secrets 등록
+**매시간 자동 실행:** UTC 매 정각 (= KST 09:00, 10:00, ... 매시간)
 
-**코드가 올라간 그 저장소** → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**
+---
 
-| Secret 이름 | 값 |
-|-------------|-----|
-| `SSU_ID` | 학번 |
-| `SSU_PASSWORD` | 비밀번호 |
-| `DISCORD_WEBHOOK_URL` | Discord 웹훅 URL (알림 채널) |
-| `DUE_SOON_HOURS` | 마감 몇 시간 전 알림 (예: `24`) — `/마감알림설정`과 맞추기 |
-| `DISCORD_GUILD_ID` | (선택) 서버 ID — 로컬에서 저장한 `lms_bot_settings.json`과 연동 시 |
+## 📋 환경 변수
 
-`.env` 파일은 Git에 올리지 마세요. (`.gitignore`에 포함됨)
+### 필수 항목
 
-> Actions는 `python main.py`를 실행하며, **전체 과제 목록은 보내지 않고** 마감 임박 알림만 보냅니다.  
-> Discord에서 `/마감알림설정`으로 12시간으로 바꿨다면, Secret `DUE_SOON_HOURS`도 `12`로 맞추세요.
+| 변수 | 설명 |
+|------|-----|
+| `SSU_ID` | 숭실대 학번 |
+| `SSU_PASSWORD` | LMS 비밀번호 |
+| `DISCORD_WEBHOOK_URL` | Discord 웹훅 URL (알림 전송) |
 
-### 3. 동작 확인
+### 선택 항목
 
-- **Actions** 탭 → **SSU LMS 과제 확인** → **Run workflow**
-- 로그: `[마감 임박] 알림 기준: 마감 N시간 전` → 조건 맞는 과제만 Discord 전송
-- 이후 **매시 정각** 자동 실행 (`cron: 0 * * * *`, UTC 기준)
+| 변수 | 기본값 | 설명 |
+|------|--------|-----|
+| `DUE_SOON_HOURS` | 24 | 마감 N시간 전 알림 |
+| `SSU_HEADLESS` | false | 브라우저 창 숨김 (GitHub Actions는 true) |
+| `SSU_KEEP_BROWSER_OPEN` | true | 로컬: 로그인 실패 시 브라우저 유지 |
+| `SSU_ONLY_ACTIVE_ASSIGNMENTS` | true | 마감 지난 과제 제외 |
+| `SSU_SEND_ALL_ASSIGNMENTS` | false | 전체 과제 Discord 전송 (마감 임박만 아님) |
+| `SSU_TIMEZONE` | Asia/Seoul | 마감 시간 기준 타임존 |
+| `SSU_DEBUG` | false | 디버그 모드: 스크린샷 저장 |
+| `DISCORD_BOT_TOKEN` | - | Discord 봇 명령어 사용 시 필요 |
+| `DISCORD_GUILD_ID` | - | 특정 서버에만 명령어 활성화 |
 
-> 같은 시각에 UTC·KST 모두 `:00`분입니다. 시계만 9시간 차이 납니다.  
-> 예: UTC 00:00 = KST 09:00 (둘 다 정각)
+---
 
-### 4. 참고
+## 🔐 Discord 웹훅 URL 생성
 
-- 무료 플랜도 시간당 1회 수준은 일반적으로 가능합니다.
-- 60일 이상 저장소 활동이 없으면 GitHub가 scheduled workflow를 비활성화할 수 있습니다.
-- SSO/캡차 정책이 바뀌면 Actions에서 로그인이 실패할 수 있습니다.
+1. Discord 서버 → 채널 우클릭 → 채널 편집
+2. 통합 → 웹훅 → 새 웹훅 생성
+3. 웹훅 이름 설정 (예: "LMS 알림")
+4. "웹훅 URL 복사" → `.env` 파일에 `DISCORD_WEBHOOK_URL` 값으로 저장
 
-## 환경 변수
+---
 
-| 변수 | 설명 | 기본값 |
-|------|------|--------|
-| `SSU_ID` | 학번 | (필수) |
-| `SSU_PASSWORD` | 비밀번호 | (필수) |
-| `SSU_HEADLESS` | 브라우저 숨김 | `false` (Actions에서는 `true`) |
-| `SSU_ONLY_ACTIVE_ASSIGNMENTS` | 마감 전 과제만 | `true` |
-| `DISCORD_WEBHOOK_URL` | Discord 웹훅 | (필수, 알림 시) |
-| `DUE_SOON_HOURS` | 마감 N시간 전 알림 | `24` |
-| `SSU_SEND_ALL_ASSIGNMENTS` | 수집 시 전 과제 전송 | `true` (Actions는 `false`) |
-| `SSU_TIMEZONE` | 마감 시각 기준 | `Asia/Seoul` |
+## ⚠️ 자주 나는 문제
+
+| 증상 | 원인 | 해결 |
+|------|------|-----|
+| `로그인 실패` | 아이디/비밀번호 오류 | 숭실대 포탈에서 직접 로그인 확인 |
+| `SSO 완료 대기 시간 초과` | 캡차/2차 인증 필요 | 로컬에서 먼저 수동 로그인 테스트 |
+| `iframe 로드 실패` | 네트워크 지연 | GitHub Actions 재실행 또는 재시도 로직 발동 |
+| `Permission denied / 403` | GitHub push 권한 없음 | Collaborator로 초대 또는 본인 저장소 사용 |
+| `과제가 수집되지 않음` | LMS 구조 변경 또는 셀렉터 오류 | `SSU_DEBUG=true` 로 스크린샷 확인 |
+
+---
+
+## 📁 주요 파일 설명
+
+```
+Project/
+├── main.py                    # 메인 진입점 (과제 수집 + 알림)
+├── get_token.py              # LMS 크롤링 (Playwright)
+├── due_soon_notify.py         # 마감 임박 필터링 및 상태 관리
+├── discord_bot.py             # Discord 웹훅 API
+├── discord_commands_bot.py    # Discord 슬래시 명령어 봇
+├── bot_settings.py            # 설정 저장/조회
+├── lms_time.py                # 타임존 및 시간 유틸
+├── due_soon_notified.json     # 이미 알린 과제 상태 (자동 생성)
+├── lms_bot_settings.json      # Discord 명령어로 저장한 설정
+├── .env                       # 환경 변수 (Git 제외)
+├── .env.example               # 환경 변수 템플릿
+├── requirements.txt           # Python 패키지 의존성
+└── .github/workflows/         # GitHub Actions 설정
+    └── check_lms.yml          # 매시간 실행 워크플로우
+```
+
+---
+
+## 🛠️ 개발 참고
+
+### 로컬 테스트 팁
+
+```bash
+# 1. 스텔스 모드 확인 (자동화 감지 안 됨)
+SSU_DEBUG=true python get_token.py
+
+# 2. 디버그 스크린샷 확인
+# → ssu_lms_debug/ 디렉토리 생성됨
+
+# 3. 마감 임박 알림 테스트
+python discord_bot.py due_soon
+
+# 4. 특정 시간대만 테스트
+DUE_SOON_HOURS=1 python main.py
+```
+
+### 코드 변경 시 주의사항
+
+- **LMS 마이페이지 구조 변경**: CSS 클래스 선택자 업데이트 필요
+  - 과제 컨테이너: `.xn-student-course-container`
+  - 과제 아이템: `.xn-student-todo-item-container`
+  - iframe: `#fulliframe`
+
+- **SmartID 로그인 흐름 변경**: `login_lms()` 함수 재검토
+  - SSO 완료 대기: `wait_for_sso_completion()`
+  - pFrame 모니터링: SmartID의 숨겨진 iframe 감지
+
+---
+
+## 📜 라이센스
+
+이 프로젝트는 개인 학습 및 과제 관리용입니다.
+
+---
+
+## 📞 문제 해결
+
+**GitHub Actions에서 실패한 경우:**
+1. Actions 탭 → 실패한 워크플로우 → 로그 확인
+2. 로그 메시지 기반으로 위 "자주 나는 문제" 표 참고
+3. `SSU_DEBUG=true`로 GitHub Secret 추가하면 스크린샷 저장 (Actions 아티팩트에서 확인 가능)
+
+**로컬에서 재현 불가한 경우:**
+- GitHub Actions 환경: Headless 모드, UTC 타임존
+- 로컬 환경: GUI 모드, Asia/Seoul 타임존
+- 시차 보정 로직 확인: `_adjust_utc_to_kst_string()`
